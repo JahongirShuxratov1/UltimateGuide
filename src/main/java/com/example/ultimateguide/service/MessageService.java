@@ -1,9 +1,9 @@
 package com.example.ultimateguide.service;
 
-import com.example.ultimateguide.entity.User;
-import com.example.ultimateguide.entity.AcademicInfo;
-import com.example.ultimateguide.entity.ExtracurricularInfo;
-import com.example.ultimateguide.entity.PersonalInfo;
+import com.example.ultimateguide.dto.UserDto;
+import com.example.ultimateguide.dto.AcademicInfoDto;
+import com.example.ultimateguide.dto.ExtracurricularInfoDto;
+import com.example.ultimateguide.dto.PersonalInfoDto;
 import org.springframework.stereotype.Service;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.api.methods.updatingmessages.EditMessageText;
@@ -86,14 +86,14 @@ public class MessageService {
         return keyboardMarkup;
     }
 
-    public InlineKeyboardMarkup createProfileMenuKeyboard(User user) {
+    public InlineKeyboardMarkup createProfileMenuKeyboard(UserDto user) {
         InlineKeyboardMarkup keyboardMarkup = new InlineKeyboardMarkup();
         List<List<InlineKeyboardButton>> keyboard = new ArrayList<>();
 
         // Check academic info completion
         boolean hasAcademicInfo = false;
         if (user != null && user.getAcademicInfo() != null) {
-            AcademicInfo academicInfo = user.getAcademicInfo();
+            AcademicInfoDto academicInfo = user.getAcademicInfo();
             hasAcademicInfo = academicInfo.getSatScore() != null || 
                             academicInfo.getActScore() != null ||
                             academicInfo.getIeltsScore() != null ||
@@ -103,7 +103,7 @@ public class MessageService {
         // Check extracurricular info completion
         boolean hasExtracurricularInfo = false;
         if (user != null && user.getExtracurricularInfo() != null) {
-            ExtracurricularInfo ecInfo = user.getExtracurricularInfo();
+            ExtracurricularInfoDto ecInfo = user.getExtracurricularInfo();
             hasExtracurricularInfo = (ecInfo.getClubs() != null && !ecInfo.getClubs().isEmpty()) ||
                                    (ecInfo.getLeadershipRoles() != null && !ecInfo.getLeadershipRoles().isEmpty()) ||
                                    (ecInfo.getVolunteerWork() != null && !ecInfo.getVolunteerWork().isEmpty()) ||
@@ -113,7 +113,7 @@ public class MessageService {
         // Check personal info completion
         boolean hasPersonalInfo = false;
         if (user != null && user.getPersonalInfo() != null) {
-            PersonalInfo personalInfo = user.getPersonalInfo();
+            PersonalInfoDto personalInfo = user.getPersonalInfo();
             hasPersonalInfo = personalInfo.getMajor() != null ||
                             (personalInfo.getCountriesOfInterest() != null && !personalInfo.getCountriesOfInterest().isEmpty()) ||
                             personalInfo.getFinancialState() != null;

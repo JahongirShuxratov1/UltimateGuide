@@ -1,9 +1,9 @@
 package com.example.ultimateguide.service;
 
 import com.example.ultimateguide.dto.ExtracurricularInfoDto;
+import com.example.ultimateguide.dto.PersonalInfoDto;
 import com.example.ultimateguide.dto.UserDto;
-import com.example.ultimateguide.entity.ExtracurricularInfo;
-import com.example.ultimateguide.entity.User;
+import com.example.ultimateguide.model.UniversityRecommendation;
 import lombok.RequiredArgsConstructor;
 import org.apache.poi.ss.usermodel.*;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
@@ -19,273 +19,211 @@ import java.util.List;
 public class CollegeRecommendationService {
     private final UserService userService;
 
+    private static final double MAX_ACCEPTANCE_RATE = 0.15; // 15% maximum realistic acceptance rate
+    private static final double SAT_WEIGHT = 0.40;
+    private static final double GPA_WEIGHT = 0.30;
+    private static final double EC_WEIGHT = 0.20;
+    private static final double ESSAY_WEIGHT = 0.10;
+
     public byte[] generateRecommendations(Long telegramId) throws IOException {
         UserDto userDto = userService.getUserByTelegramId(telegramId);
         if (userDto == null) {
             throw new IllegalStateException("User not found");
         }
 
-        // Create workbook and sheet
+        List<UniversityRecommendation> recommendations = calculateRecommendations(userDto);
+        return createExcelFile(recommendations);
+    }
+
+    private List<UniversityRecommendation> calculateRecommendations(UserDto user) {
+        List<UniversityRecommendation> recommendations = new ArrayList<>();
+        
+        // Calculate base score
+        double baseScore = calculateBaseScore(user);
+        
+        // Generate recommendations for different tiers
+        recommendations.addAll(generateTierRecommendations(user, baseScore, "Reach", 0.05));
+        recommendations.addAll(generateTierRecommendations(user, baseScore, "Target", 0.10));
+        recommendations.addAll(generateTierRecommendations(user, baseScore, "Safety", 0.15));
+        
+        return recommendations;
+    }
+
+    private double calculateBaseScore(UserDto user) {
+        double satScore = normalizeSAT(user.getAcademicInfo().getSatScore());
+        double gpaScore = normalizeGPA(user.getAcademicInfo().getGpa());
+        double ecScore = calculateECScore(user.getExtracurricularInfo());
+        double essayScore = calculateEssayScore(user.getPersonalInfo());
+
+        return (SAT_WEIGHT * satScore) + 
+               (GPA_WEIGHT * gpaScore) + 
+               (EC_WEIGHT * ecScore) + 
+               (ESSAY_WEIGHT * essayScore);
+    }
+
+    private double normalizeSAT(Integer satScore) {
+        if (satScore == null) return 0.0;
+        // Normalize to 0-1 range, with 1600 as max
+        return Math.min(1.0, satScore / 1600.0);
+    }
+
+    private double normalizeGPA(Double gpa) {
+        if (gpa == null) return 0.0;
+        // Normalize to 0-1 range, with 4.0 as max
+        return Math.min(1.0, gpa / 4.0);
+    }
+
+    private double calculateECScore(ExtracurricularInfoDto ecInfo) {
+        if (ecInfo == null) return 0.0;
+        
+        int score = 0;
+        // Clubs (max 3 points)
+        score += Math.min(3, ecInfo.getClubs().size());
+        
+        // Leadership roles (max 3 points)
+        score += Math.min(3, ecInfo.getLeadershipRoles().size());
+        
+        // Volunteer work (max 2 points)
+        score += Math.min(2, ecInfo.getVolunteerWork().size());
+        
+        // Awards (max 2 points)
+        score += Math.min(2, ecInfo.getAwards().size());
+        
+        // Normalize to 0-1 range
+        return score / 10.0;
+    }
+
+    private double calculateEssayScore(PersonalInfoDto personalInfo) {
+        if (personalInfo == null) return 0.0;
+        
+        int score = 0;
+        // Major clarity (max 3 points)
+        if (personalInfo.getMajor() != null && !personalInfo.getMajor().isEmpty()) {
+            score += 3;
+        }
+        
+        // Financial planning (max 3 points)
+        if (personalInfo.getFinancialState() != null && !personalInfo.getFinancialState().isEmpty()) {
+            score += 3;
+        }
+        
+        // Country focus (max 4 points)
+        if (personalInfo.getCountriesOfInterest() != null && !personalInfo.getCountriesOfInterest().isEmpty()) {
+            score += Math.min(4, personalInfo.getCountriesOfInterest().size());
+        }
+        
+        // Normalize to 0-1 range
+        return score / 10.0;
+    }
+
+    private List<UniversityRecommendation> generateTierRecommendations(UserDto user, double baseScore, String tier, double acceptanceRate) {
+        List<UniversityRecommendation> recommendations = new ArrayList<>();
+        
+        // Adjust acceptance rate based on tier
+        double adjustedRate = Math.min(acceptanceRate * baseScore, MAX_ACCEPTANCE_RATE);
+        
+        // Generate 5-7 universities per tier
+        int count = tier.equals("Target") ? 7 : 5;
+        
+        for (int i = 0; i < count; i++) {
+            UniversityRecommendation rec = new UniversityRecommendation();
+            rec.setUniversityName(getUniversityName(tier, i));
+            rec.setLocation(getUniversityLocation(tier, i));
+            rec.setAcceptanceRate(adjustedRate);
+            rec.setAnnualTuition(calculateTuition(tier));
+            rec.getScholarships().addAll(generateScholarships());
+            rec.setProbability(adjustedRate);
+            rec.getPrograms().addAll(generatePrograms(user.getPersonalInfo().getMajor()));
+            rec.getDeadlines().addAll(generateDeadlines());
+            
+            recommendations.add(rec);
+        }
+        
+        return recommendations;
+    }
+
+    private String getUniversityName(String tier, int index) {
+        // Implementation would include actual university names based on tier
+        return String.format("University %s %d", tier, index + 1);
+    }
+
+    private String getUniversityLocation(String tier, int index) {
+        // Implementation would include actual locations
+        return String.format("Location %d", index + 1);
+    }
+
+    private double calculateTuition(String tier) {
+        // Base tuition calculation with tier adjustments
+        double baseTuition = 45000.0;
+        switch (tier) {
+            case "Reach": return baseTuition * 1.2;
+            case "Target": return baseTuition;
+            case "Safety": return baseTuition * 0.8;
+            default: return baseTuition;
+        }
+    }
+
+    private List<String> generateScholarships() {
+        List<String> scholarships = new ArrayList<>();
+        scholarships.add("Merit-based Scholarship");
+        scholarships.add("International Student Scholarship");
+        scholarships.add("Uzbekistan-specific Scholarship");
+        return scholarships;
+    }
+
+    private List<String> generatePrograms(String major) {
+        List<String> programs = new ArrayList<>();
+        if (major != null) {
+            programs.add(major + " Program");
+            programs.add(major + " with Research Focus");
+            programs.add(major + " with Industry Partnership");
+        }
+        return programs;
+    }
+
+    private List<String> generateDeadlines() {
+        List<String> deadlines = new ArrayList<>();
+        deadlines.add("Early Decision: November 1");
+        deadlines.add("Regular Decision: January 15");
+        deadlines.add("Rolling Admission: Until May 1");
+        return deadlines;
+    }
+
+    private byte[] createExcelFile(List<UniversityRecommendation> recommendations) throws IOException {
         try (Workbook workbook = new XSSFWorkbook()) {
             Sheet sheet = workbook.createSheet("College Recommendations");
 
             // Create header row
             Row headerRow = sheet.createRow(0);
-            String[] headers = {"University Name", "Location", "Acceptance Rate", "Annual Tuition", 
-                              "Available Scholarships", "Admission Probability", "Recommended Programs", "Application Deadlines"};
-            
-            CellStyle headerStyle = workbook.createCellStyle();
-            headerStyle.setFillForegroundColor(IndexedColors.LIGHT_BLUE.getIndex());
-            headerStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
-            Font headerFont = workbook.createFont();
-            headerFont.setBold(true);
-            headerStyle.setFont(headerFont);
-
+            String[] headers = {"University", "Location", "Acceptance Rate", "Annual Tuition", 
+                              "Scholarships", "Probability", "Programs", "Deadlines"};
             for (int i = 0; i < headers.length; i++) {
                 Cell cell = headerRow.createCell(i);
                 cell.setCellValue(headers[i]);
-                cell.setCellStyle(headerStyle);
-                sheet.setColumnWidth(i, 6000);
             }
-
-            // Get recommendations based on user profile
-            List<CollegeRecommendation> recommendations = getRecommendationsForUser(userDto);
 
             // Fill data rows
             int rowNum = 1;
-            CellStyle dataStyle = workbook.createCellStyle();
-            dataStyle.setWrapText(true);
-
-            for (CollegeRecommendation rec : recommendations) {
+            for (UniversityRecommendation rec : recommendations) {
                 Row row = sheet.createRow(rowNum++);
                 row.createCell(0).setCellValue(rec.getUniversityName());
                 row.createCell(1).setCellValue(rec.getLocation());
-                row.createCell(2).setCellValue(rec.getAcceptanceRate() + "%");
-                row.createCell(3).setCellValue("$" + rec.getAnnualTuition());
-                row.createCell(4).setCellValue(rec.getScholarships());
-                row.createCell(5).setCellValue(rec.getProbability() + "%");
-                row.createCell(6).setCellValue(rec.getPrograms());
-                row.createCell(7).setCellValue(rec.getDeadlines());
-
-                // Apply style to all cells in the row
-                for (int i = 0; i < headers.length; i++) {
-                    row.getCell(i).setCellStyle(dataStyle);
-                }
+                row.createCell(2).setCellValue(String.format("%.1f%%", rec.getAcceptanceRate() * 100.0));
+                row.createCell(3).setCellValue(String.format("$%.2f", rec.getAnnualTuition()));
+                row.createCell(4).setCellValue(String.join(", ", rec.getScholarships()));
+                row.createCell(5).setCellValue(String.format("%.1f%%", rec.getProbability() * 100.0));
+                row.createCell(6).setCellValue(String.join(", ", rec.getPrograms()));
+                row.createCell(7).setCellValue(String.join(", ", rec.getDeadlines()));
             }
 
-            // Write to ByteArrayOutputStream
+            // Auto-size columns
+            for (int i = 0; i < headers.length; i++) {
+                sheet.autoSizeColumn(i);
+            }
+
             ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
             workbook.write(outputStream);
             return outputStream.toByteArray();
         }
-    }
-
-    private List<CollegeRecommendation> getRecommendationsForUser(UserDto user) {
-        List<CollegeRecommendation> recommendations = new ArrayList<>();
-        
-        // Get user's academic profile
-        Double gpa = user.getAcademicInfo().getGpa();
-        Integer satScore = user.getAcademicInfo().getSatScore();
-        Integer actScore = user.getAcademicInfo().getActScore();
-        Double ieltsScore = user.getAcademicInfo().getIeltsScore();
-        
-        // Get user's interests and preferences
-        String major = user.getPersonalInfo().getMajor();
-        List<String> countries = user.getPersonalInfo().getCountriesOfInterest();
-        String financialState = user.getPersonalInfo().getFinancialState();
-        
-        // Check extracurricular strength
-        boolean hasStrongExtracurriculars = hasStrongExtracurriculars(user.getExtracurricularInfo());
-
-        // Top tier universities (highly selective)
-        if ((gpa != null && gpa >= 3.8) && 
-            ((satScore != null && satScore >= 1500) || (actScore != null && actScore >= 34))) {
-            
-            recommendations.add(new CollegeRecommendation(
-                "Harvard University",
-                "Cambridge, MA, USA",
-                5,
-                55000,
-                "Need-based aid available up to full tuition",
-                hasStrongExtracurriculars ? 75 : 60,
-                "Computer Science, Economics, Mathematics, Liberal Arts",
-                "Regular Decision: January 1, Early Action: November 1"
-            ));
-            
-            recommendations.add(new CollegeRecommendation(
-                "Stanford University",
-                "Stanford, CA, USA",
-                4,
-                56000,
-                "Full need-based financial aid, merit scholarships available",
-                hasStrongExtracurriculars ? 70 : 55,
-                "Engineering, Computer Science, Business, Environmental Science",
-                "Regular Decision: January 5, Early Action: November 1"
-            ));
-        }
-
-        // Strong universities (selective)
-        if ((gpa != null && gpa >= 3.5) && 
-            ((satScore != null && satScore >= 1400) || (actScore != null && actScore >= 31))) {
-            
-            recommendations.add(new CollegeRecommendation(
-                "University of Michigan",
-                "Ann Arbor, MI, USA",
-                23,
-                49000,
-                "Merit scholarships and need-based aid available",
-                hasStrongExtracurriculars ? 85 : 70,
-                "Engineering, Business, Psychology, Computer Science",
-                "Regular Decision: February 1, Early Action: November 1"
-            ));
-            
-            recommendations.add(new CollegeRecommendation(
-                "Boston University",
-                "Boston, MA, USA",
-                20,
-                58000,
-                "Merit scholarships up to $25,000 per year",
-                hasStrongExtracurriculars ? 80 : 65,
-                "Business, Communications, Engineering, Life Sciences",
-                "Regular Decision: January 4, Early Decision: November 1"
-            ));
-        }
-
-        // Good universities (moderate selectivity)
-        if ((gpa != null && gpa >= 3.0) && 
-            ((satScore != null && satScore >= 1200) || (actScore != null && actScore >= 25))) {
-            
-            recommendations.add(new CollegeRecommendation(
-                "Penn State University",
-                "University Park, PA, USA",
-                56,
-                35000,
-                "Various merit and need-based scholarships available",
-                hasStrongExtracurriculars ? 90 : 80,
-                "Engineering, Business, Agriculture, Liberal Arts",
-                "Rolling Admissions: Priority by November 30"
-            ));
-            
-            recommendations.add(new CollegeRecommendation(
-                "Arizona State University",
-                "Tempe, AZ, USA",
-                88,
-                29000,
-                "New American University Scholars Program, merit awards",
-                hasStrongExtracurriculars ? 95 : 85,
-                "Business, Engineering, Journalism, Sciences",
-                "Rolling Admissions: Priority by February 1"
-            ));
-        }
-
-        // International universities (if interested)
-        if (countries != null && !countries.isEmpty()) {
-            if (countries.contains("UK") && ieltsScore != null && ieltsScore >= 6.5) {
-                recommendations.add(new CollegeRecommendation(
-                    "University of Manchester",
-                    "Manchester, UK",
-                    56,
-                    25000,
-                    "International Excellence Scholarships available",
-                    hasStrongExtracurriculars ? 75 : 65,
-                    "Engineering, Business, Sciences, Humanities",
-                    "UCAS Deadline: January 15"
-                ));
-            }
-            
-            if (countries.contains("Canada") && ieltsScore != null && ieltsScore >= 6.0) {
-                recommendations.add(new CollegeRecommendation(
-                    "University of Toronto",
-                    "Toronto, Canada",
-                    43,
-                    45000,
-                    "Lester B. Pearson International Scholarship",
-                    hasStrongExtracurriculars ? 80 : 70,
-                    "Computer Science, Engineering, Life Sciences, Arts",
-                    "Regular Decision: January 15"
-                ));
-            }
-        }
-
-        // Add scholarship-focused options if financial aid is needed
-        if (financialState != null && 
-            (financialState.toLowerCase().contains("need") || 
-             financialState.toLowerCase().contains("scholarship"))) {
-            
-            recommendations.add(new CollegeRecommendation(
-                "University of Alabama",
-                "Tuscaloosa, AL, USA",
-                80,
-                30000,
-                "Presidential Scholarship, full tuition for high achievers",
-                hasStrongExtracurriculars ? 95 : 85,
-                "Business, Engineering, Communications, Sciences",
-                "Rolling Admissions: Priority by December 15"
-            ));
-        }
-
-        return recommendations;
-    }
-
-    private boolean hasStrongExtracurriculars(ExtracurricularInfoDto info) {
-        if (info == null) return false;
-        
-        int score = 0;
-        
-        // Check leadership roles
-        if (info.getLeadershipRoles() != null && !info.getLeadershipRoles().isEmpty()) {
-            score += 2;
-        }
-        
-        // Check awards
-        if (info.getAwards() != null && !info.getAwards().isEmpty()) {
-            score += 2;
-        }
-        
-        // Check clubs
-        if (info.getClubs() != null && !info.getClubs().isEmpty()) {
-            score += 1;
-        }
-        
-        // Check volunteer work
-        if (info.getVolunteerWork() != null && !info.getVolunteerWork().isEmpty()) {
-            score += 1;
-        }
-        
-        return score >= 3; // Consider strong if score is 3 or higher
-    }
-
-    private static class CollegeRecommendation {
-        private final String universityName;
-        private final String location;
-        private final int acceptanceRate;
-        private final int annualTuition;
-        private final String scholarships;
-        private final int probability;
-        private final String programs;
-        private final String deadlines;
-
-        public CollegeRecommendation(String universityName, String location, int acceptanceRate,
-                                   int annualTuition, String scholarships, int probability,
-                                   String programs, String deadlines) {
-            this.universityName = universityName;
-            this.location = location;
-            this.acceptanceRate = acceptanceRate;
-            this.annualTuition = annualTuition;
-            this.scholarships = scholarships;
-            this.probability = probability;
-            this.programs = programs;
-            this.deadlines = deadlines;
-        }
-
-        // Getters
-        public String getUniversityName() { return universityName; }
-        public String getLocation() { return location; }
-        public int getAcceptanceRate() { return acceptanceRate; }
-        public int getAnnualTuition() { return annualTuition; }
-        public String getScholarships() { return scholarships; }
-        public int getProbability() { return probability; }
-        public String getPrograms() { return programs; }
-        public String getDeadlines() { return deadlines; }
     }
 } 
