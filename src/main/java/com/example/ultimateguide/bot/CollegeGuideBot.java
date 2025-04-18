@@ -168,12 +168,13 @@ public class CollegeGuideBot extends TelegramLongPollingBot {
                     }
                     
                     try {
-                        byte[] excelFile = collegeRecommendationService.generateRecommendations(chatId);
-                        
-                        // Send a message first
-                        execute(messageService.createMessage(chatId,
-                            "Generating your personalized college recommendations...",
+                        // Send initial message
+                        execute(messageService.createEditMessage(chatId, messageId,
+                            "Generating your personalized college recommendations... This may take a moment.",
                             null));
+                        
+                        // Generate recommendations
+                        byte[] excelFile = collegeRecommendationService.generateRecommendations(chatId);
                         
                         // Send the Excel file
                         SendDocument sendDocument = new SendDocument();
@@ -188,7 +189,8 @@ public class CollegeGuideBot extends TelegramLongPollingBot {
                             "The Excel file contains detailed information about each recommended university.",
                             messageService.createMainMenuKeyboard()));
                     } catch (Exception e) {
-                        execute(messageService.createEditMessage(chatId, messageId,
+                        e.printStackTrace();
+                        execute(messageService.createMessage(chatId,
                             "Sorry, there was an error generating your recommendations. Please try again later.",
                             messageService.createMainMenuKeyboard()));
                     }

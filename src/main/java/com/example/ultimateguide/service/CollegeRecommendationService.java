@@ -39,29 +39,64 @@ public class CollegeRecommendationService {
 
     private List<UniversityRecommendation> getAIRecommendations(UserDto user) {
         try {
-            String prompt = buildPrompt(user);
-            ChatSession chat = model.startChat();
-            GenerateContentResponse response = chat.sendMessage(prompt);
-            
-            String jsonResponse = ResponseHandler.getText(response);
+            // First, get real-time university data
+            String searchPrompt = buildSearchPrompt(user);
+            ChatSession searchSession = model.startChat();
+            GenerateContentResponse searchResponse = searchSession.sendMessage(searchPrompt);
+            String universitiesData = ResponseHandler.getText(searchResponse);
+
+            // Then, get personalized recommendations based on the data
+            String recommendationPrompt = buildRecommendationPrompt(user, universitiesData);
+            ChatSession recommendationSession = model.startChat();
+            GenerateContentResponse recommendationResponse = recommendationSession.sendMessage(recommendationPrompt);
+            String jsonResponse = ResponseHandler.getText(recommendationResponse);
+
             return objectMapper.readValue(jsonResponse, new TypeReference<List<UniversityRecommendation>>() {});
         } catch (Exception e) {
             throw new RuntimeException("Failed to get AI recommendations: " + e.getMessage(), e);
         }
     }
 
-    private String buildPrompt(UserDto user) {
+    private String buildSearchPrompt(UserDto user) {
         StringBuilder prompt = new StringBuilder();
-        prompt.append("Based on the following student profile, recommend universities that would be a good fit. ");
-        prompt.append("Format the response as a JSON array of university recommendations. Each recommendation should include: ");
-        prompt.append("universityName, location, acceptanceRate (as decimal), annualTuition (in USD), ");
-        prompt.append("scholarships (array of strings), probability (as decimal), programs (array of strings), and deadlines (array of strings).\n\n");
+        prompt.append("Search for real universities in ");
         
+        if (user.getPersonalInfo() != null && user.getPersonalInfo().getCountriesOfInterest() != null 
+            && !user.getPersonalInfo().getCountriesOfInterest().isEmpty()) {
+            prompt.append(String.join(", ", user.getPersonalInfo().getCountriesOfInterest()));
+        } else {
+            prompt.append("worldwide");
+        }
+        
+        prompt.append(" that offer ");
+        
+        if (user.getPersonalInfo() != null && user.getPersonalInfo().getMajor() != null) {
+            prompt.append(user.getPersonalInfo().getMajor());
+        } else {
+            prompt.append("various programs");
+        }
+        
+        prompt.append(". For each university, find:\n");
+        prompt.append("1. Current acceptance rates\n");
+        prompt.append("2. Annual tuition fees for international students\n");
+        prompt.append("3. Available scholarships and financial aid\n");
+        prompt.append("4. Specific programs related to the student's interests\n");
+        prompt.append("5. Application deadlines for international students\n");
+        prompt.append("6. Entry requirements including test scores and GPA\n");
+        prompt.append("\nProvide real, up-to-date information from reliable sources.");
+        
+        return prompt.toString();
+    }
+
+    private String buildRecommendationPrompt(UserDto user, String universitiesData) {
+        StringBuilder prompt = new StringBuilder();
+        prompt.append("Based on the following university data and student profile, recommend the best matching universities.\n\n");
+        prompt.append("University Data:\n").append(universitiesData).append("\n\n");
         prompt.append("Student Profile:\n");
         
         // Academic Info
         if (user.getAcademicInfo() != null) {
-            prompt.append("Academic:\n");
+            prompt.append("Academic Qualifications:\n");
             if (user.getAcademicInfo().getSatScore() != null) {
                 prompt.append("- SAT Score: ").append(user.getAcademicInfo().getSatScore()).append("\n");
             }
@@ -95,7 +130,7 @@ public class CollegeRecommendationService {
         
         // Personal Info
         if (user.getPersonalInfo() != null) {
-            prompt.append("\nPersonal Preferences:\n");
+            prompt.append("\nPreferences:\n");
             if (user.getPersonalInfo().getMajor() != null) {
                 prompt.append("- Desired Major: ").append(user.getPersonalInfo().getMajor()).append("\n");
             }
@@ -107,11 +142,24 @@ public class CollegeRecommendationService {
             }
         }
 
-        prompt.append("\nProvide detailed recommendations for universities that match this profile, ");
-        prompt.append("including specific programs, scholarships, and accurate acceptance rates. ");
-        prompt.append("Focus on universities in the student's preferred countries. ");
-        prompt.append("Consider the student's academic performance and financial needs when suggesting scholarships. ");
-        prompt.append("Include application deadlines specific to international students.");
+        prompt.append("\nAnalyze the universities and provide recommendations in this JSON format:\n");
+        prompt.append("[{\n");
+        prompt.append("  \"universityName\": \"...\",\n");
+        prompt.append("  \"location\": \"...\",\n");
+        prompt.append("  \"acceptanceRate\": 0.XX,\n");
+        prompt.append("  \"annualTuition\": XXXXX.XX,\n");
+        prompt.append("  \"scholarships\": [\"...\", \"...\"],\n");
+        prompt.append("  \"probability\": 0.XX,\n");
+        prompt.append("  \"programs\": [\"...\", \"...\"],\n");
+        prompt.append("  \"deadlines\": [\"...\", \"...\"]\n");
+        prompt.append("}]\n\n");
+        prompt.append("Consider these factors:\n");
+        prompt.append("1. Academic match (compare student's scores with university requirements)\n");
+        prompt.append("2. Program availability (match with desired major)\n");
+        prompt.append("3. Financial fit (consider tuition, scholarships, and student's financial state)\n");
+        prompt.append("4. Location preference (prioritize universities in preferred countries)\n");
+        prompt.append("5. Extracurricular alignment (match student's activities with university strengths)\n");
+        prompt.append("\nProvide only real universities with accurate, current information. Format numbers as decimals (e.g., 0.85 for 85%).");
 
         return prompt.toString();
     }
