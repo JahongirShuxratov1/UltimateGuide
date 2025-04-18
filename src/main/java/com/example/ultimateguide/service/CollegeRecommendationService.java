@@ -4,26 +4,28 @@ import com.example.ultimateguide.dto.ExtracurricularInfoDto;
 import com.example.ultimateguide.dto.PersonalInfoDto;
 import com.example.ultimateguide.dto.UserDto;
 import com.example.ultimateguide.model.UniversityRecommendation;
+import com.google.cloud.vertexai.api.GenerateContentResponse;
+import com.google.cloud.vertexai.generativeai.preview.GenerativeModel;
+import com.google.cloud.vertexai.generativeai.preview.ChatSession;
+import com.google.cloud.vertexai.generativeai.preview.ResponseHandler;
 import lombok.RequiredArgsConstructor;
 import org.apache.poi.ss.usermodel.*;
+import org.apache.poi.ss.util.CellRangeAddress;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.stereotype.Service;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.core.type.TypeReference;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.*;
 
 @Service
 @RequiredArgsConstructor
 public class CollegeRecommendationService {
     private final UserService userService;
-
-    private static final double MAX_ACCEPTANCE_RATE = 0.15; // 15% maximum realistic acceptance rate
-    private static final double SAT_WEIGHT = 0.40;
-    private static final double GPA_WEIGHT = 0.30;
-    private static final double EC_WEIGHT = 0.20;
-    private static final double ESSAY_WEIGHT = 0.10;
+    private final GenerativeModel model;
+    private final ObjectMapper objectMapper;
 
     public byte[] generateRecommendations(Long telegramId) throws IOException {
         UserDto userDto = userService.getUserByTelegramId(telegramId);
@@ -31,195 +33,148 @@ public class CollegeRecommendationService {
             throw new IllegalStateException("User not found");
         }
 
-        List<UniversityRecommendation> recommendations = calculateRecommendations(userDto);
+        List<UniversityRecommendation> recommendations = getAIRecommendations(userDto);
         return createExcelFile(recommendations);
     }
 
-    private List<UniversityRecommendation> calculateRecommendations(UserDto user) {
-        List<UniversityRecommendation> recommendations = new ArrayList<>();
-        
-        // Calculate base score
-        double baseScore = calculateBaseScore(user);
-        
-        // Generate recommendations for different tiers
-        recommendations.addAll(generateTierRecommendations(user, baseScore, "Reach", 0.05));
-        recommendations.addAll(generateTierRecommendations(user, baseScore, "Target", 0.10));
-        recommendations.addAll(generateTierRecommendations(user, baseScore, "Safety", 0.15));
-        
-        return recommendations;
-    }
-
-    private double calculateBaseScore(UserDto user) {
-        double satScore = normalizeSAT(user.getAcademicInfo().getSatScore());
-        double gpaScore = normalizeGPA(user.getAcademicInfo().getGpa());
-        double ecScore = calculateECScore(user.getExtracurricularInfo());
-        double essayScore = calculateEssayScore(user.getPersonalInfo());
-
-        return (SAT_WEIGHT * satScore) + 
-               (GPA_WEIGHT * gpaScore) + 
-               (EC_WEIGHT * ecScore) + 
-               (ESSAY_WEIGHT * essayScore);
-    }
-
-    private double normalizeSAT(Integer satScore) {
-        if (satScore == null) return 0.0;
-        // Normalize to 0-1 range, with 1600 as max
-        return Math.min(1.0, satScore / 1600.0);
-    }
-
-    private double normalizeGPA(Double gpa) {
-        if (gpa == null) return 0.0;
-        // Normalize to 0-1 range, with 4.0 as max
-        return Math.min(1.0, gpa / 4.0);
-    }
-
-    private double calculateECScore(ExtracurricularInfoDto ecInfo) {
-        if (ecInfo == null) return 0.0;
-        
-        int score = 0;
-        // Clubs (max 3 points)
-        score += Math.min(3, ecInfo.getClubs().size());
-        
-        // Leadership roles (max 3 points)
-        score += Math.min(3, ecInfo.getLeadershipRoles().size());
-        
-        // Volunteer work (max 2 points)
-        score += Math.min(2, ecInfo.getVolunteerWork().size());
-        
-        // Awards (max 2 points)
-        score += Math.min(2, ecInfo.getAwards().size());
-        
-        // Normalize to 0-1 range
-        return score / 10.0;
-    }
-
-    private double calculateEssayScore(PersonalInfoDto personalInfo) {
-        if (personalInfo == null) return 0.0;
-        
-        int score = 0;
-        // Major clarity (max 3 points)
-        if (personalInfo.getMajor() != null && !personalInfo.getMajor().isEmpty()) {
-            score += 3;
-        }
-        
-        // Financial planning (max 3 points)
-        if (personalInfo.getFinancialState() != null && !personalInfo.getFinancialState().isEmpty()) {
-            score += 3;
-        }
-        
-        // Country focus (max 4 points)
-        if (personalInfo.getCountriesOfInterest() != null && !personalInfo.getCountriesOfInterest().isEmpty()) {
-            score += Math.min(4, personalInfo.getCountriesOfInterest().size());
-        }
-        
-        // Normalize to 0-1 range
-        return score / 10.0;
-    }
-
-    private List<UniversityRecommendation> generateTierRecommendations(UserDto user, double baseScore, String tier, double acceptanceRate) {
-        List<UniversityRecommendation> recommendations = new ArrayList<>();
-        
-        // Adjust acceptance rate based on tier
-        double adjustedRate = Math.min(acceptanceRate * baseScore, MAX_ACCEPTANCE_RATE);
-        
-        // Generate 5-7 universities per tier
-        int count = tier.equals("Target") ? 7 : 5;
-        
-        for (int i = 0; i < count; i++) {
-            UniversityRecommendation rec = new UniversityRecommendation();
-            rec.setUniversityName(getUniversityName(tier, i));
-            rec.setLocation(getUniversityLocation(tier, i));
-            rec.setAcceptanceRate(adjustedRate);
-            rec.setAnnualTuition(calculateTuition(tier));
-            rec.getScholarships().addAll(generateScholarships());
-            rec.setProbability(adjustedRate);
-            rec.getPrograms().addAll(generatePrograms(user.getPersonalInfo().getMajor()));
-            rec.getDeadlines().addAll(generateDeadlines());
+    private List<UniversityRecommendation> getAIRecommendations(UserDto user) {
+        try {
+            String prompt = buildPrompt(user);
+            ChatSession chat = model.startChat();
+            GenerateContentResponse response = chat.sendMessage(prompt);
             
-            recommendations.add(rec);
+            String jsonResponse = ResponseHandler.getText(response);
+            return objectMapper.readValue(jsonResponse, new TypeReference<List<UniversityRecommendation>>() {});
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to get AI recommendations: " + e.getMessage(), e);
+        }
+    }
+
+    private String buildPrompt(UserDto user) {
+        StringBuilder prompt = new StringBuilder();
+        prompt.append("Based on the following student profile, recommend universities that would be a good fit. ");
+        prompt.append("Format the response as a JSON array of university recommendations. Each recommendation should include: ");
+        prompt.append("universityName, location, acceptanceRate (as decimal), annualTuition (in USD), ");
+        prompt.append("scholarships (array of strings), probability (as decimal), programs (array of strings), and deadlines (array of strings).\n\n");
+        
+        prompt.append("Student Profile:\n");
+        
+        // Academic Info
+        if (user.getAcademicInfo() != null) {
+            prompt.append("Academic:\n");
+            if (user.getAcademicInfo().getSatScore() != null) {
+                prompt.append("- SAT Score: ").append(user.getAcademicInfo().getSatScore()).append("\n");
+            }
+            if (user.getAcademicInfo().getActScore() != null) {
+                prompt.append("- ACT Score: ").append(user.getAcademicInfo().getActScore()).append("\n");
+            }
+            if (user.getAcademicInfo().getIeltsScore() != null) {
+                prompt.append("- IELTS Score: ").append(user.getAcademicInfo().getIeltsScore()).append("\n");
+            }
+            if (user.getAcademicInfo().getGpa() != null) {
+                prompt.append("- GPA: ").append(user.getAcademicInfo().getGpa()).append("\n");
+            }
         }
         
-        return recommendations;
-    }
-
-    private String getUniversityName(String tier, int index) {
-        // Implementation would include actual university names based on tier
-        return String.format("University %s %d", tier, index + 1);
-    }
-
-    private String getUniversityLocation(String tier, int index) {
-        // Implementation would include actual locations
-        return String.format("Location %d", index + 1);
-    }
-
-    private double calculateTuition(String tier) {
-        // Base tuition calculation with tier adjustments
-        double baseTuition = 45000.0;
-        switch (tier) {
-            case "Reach": return baseTuition * 1.2;
-            case "Target": return baseTuition;
-            case "Safety": return baseTuition * 0.8;
-            default: return baseTuition;
+        // Extracurricular Info
+        if (user.getExtracurricularInfo() != null) {
+            prompt.append("\nExtracurricular Activities:\n");
+            if (!user.getExtracurricularInfo().getClubs().isEmpty()) {
+                prompt.append("- Clubs: ").append(String.join(", ", user.getExtracurricularInfo().getClubs())).append("\n");
+            }
+            if (!user.getExtracurricularInfo().getLeadershipRoles().isEmpty()) {
+                prompt.append("- Leadership: ").append(String.join(", ", user.getExtracurricularInfo().getLeadershipRoles())).append("\n");
+            }
+            if (!user.getExtracurricularInfo().getVolunteerWork().isEmpty()) {
+                prompt.append("- Volunteer Work: ").append(String.join(", ", user.getExtracurricularInfo().getVolunteerWork())).append("\n");
+            }
+            if (!user.getExtracurricularInfo().getAwards().isEmpty()) {
+                prompt.append("- Awards: ").append(String.join(", ", user.getExtracurricularInfo().getAwards())).append("\n");
+            }
         }
-    }
-
-    private List<String> generateScholarships() {
-        List<String> scholarships = new ArrayList<>();
-        scholarships.add("Merit-based Scholarship");
-        scholarships.add("International Student Scholarship");
-        scholarships.add("Uzbekistan-specific Scholarship");
-        return scholarships;
-    }
-
-    private List<String> generatePrograms(String major) {
-        List<String> programs = new ArrayList<>();
-        if (major != null) {
-            programs.add(major + " Program");
-            programs.add(major + " with Research Focus");
-            programs.add(major + " with Industry Partnership");
+        
+        // Personal Info
+        if (user.getPersonalInfo() != null) {
+            prompt.append("\nPersonal Preferences:\n");
+            if (user.getPersonalInfo().getMajor() != null) {
+                prompt.append("- Desired Major: ").append(user.getPersonalInfo().getMajor()).append("\n");
+            }
+            if (user.getPersonalInfo().getCountriesOfInterest() != null && !user.getPersonalInfo().getCountriesOfInterest().isEmpty()) {
+                prompt.append("- Preferred Countries: ").append(String.join(", ", user.getPersonalInfo().getCountriesOfInterest())).append("\n");
+            }
+            if (user.getPersonalInfo().getFinancialState() != null) {
+                prompt.append("- Financial State: ").append(user.getPersonalInfo().getFinancialState()).append("\n");
+            }
         }
-        return programs;
-    }
 
-    private List<String> generateDeadlines() {
-        List<String> deadlines = new ArrayList<>();
-        deadlines.add("Early Decision: November 1");
-        deadlines.add("Regular Decision: January 15");
-        deadlines.add("Rolling Admission: Until May 1");
-        return deadlines;
+        prompt.append("\nProvide detailed recommendations for universities that match this profile, ");
+        prompt.append("including specific programs, scholarships, and accurate acceptance rates. ");
+        prompt.append("Focus on universities in the student's preferred countries. ");
+        prompt.append("Consider the student's academic performance and financial needs when suggesting scholarships. ");
+        prompt.append("Include application deadlines specific to international students.");
+
+        return prompt.toString();
     }
 
     private byte[] createExcelFile(List<UniversityRecommendation> recommendations) throws IOException {
         try (Workbook workbook = new XSSFWorkbook()) {
             Sheet sheet = workbook.createSheet("College Recommendations");
 
-            // Create header row
+            // Create header row with styling
+            CellStyle headerStyle = workbook.createCellStyle();
+            headerStyle.setFillForegroundColor(IndexedColors.ROYAL_BLUE.getIndex());
+            headerStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+            Font headerFont = workbook.createFont();
+            headerFont.setColor(IndexedColors.WHITE.getIndex());
+            headerFont.setBold(true);
+            headerStyle.setFont(headerFont);
+
             Row headerRow = sheet.createRow(0);
             String[] headers = {"University", "Location", "Acceptance Rate", "Annual Tuition", 
-                              "Scholarships", "Probability", "Programs", "Deadlines"};
+                              "Scholarships", "Admission Probability", "Recommended Programs", "Application Deadlines"};
+            
             for (int i = 0; i < headers.length; i++) {
                 Cell cell = headerRow.createCell(i);
                 cell.setCellValue(headers[i]);
+                cell.setCellStyle(headerStyle);
+                sheet.setColumnWidth(i, 256 * 30); // Set column width to 30 characters
             }
+
+            // Create cell styles for data rows
+            CellStyle percentStyle = workbook.createCellStyle();
+            percentStyle.setDataFormat(workbook.createDataFormat().getFormat("0.0%"));
+            
+            CellStyle currencyStyle = workbook.createCellStyle();
+            currencyStyle.setDataFormat(workbook.createDataFormat().getFormat("$#,##0"));
 
             // Fill data rows
             int rowNum = 1;
             for (UniversityRecommendation rec : recommendations) {
                 Row row = sheet.createRow(rowNum++);
+                
                 row.createCell(0).setCellValue(rec.getUniversityName());
                 row.createCell(1).setCellValue(rec.getLocation());
-                row.createCell(2).setCellValue(String.format("%.1f%%", rec.getAcceptanceRate() * 100.0));
-                row.createCell(3).setCellValue(String.format("$%.2f", rec.getAnnualTuition()));
-                row.createCell(4).setCellValue(String.join(", ", rec.getScholarships()));
-                row.createCell(5).setCellValue(String.format("%.1f%%", rec.getProbability() * 100.0));
-                row.createCell(6).setCellValue(String.join(", ", rec.getPrograms()));
-                row.createCell(7).setCellValue(String.join(", ", rec.getDeadlines()));
+                
+                Cell acceptanceCell = row.createCell(2);
+                acceptanceCell.setCellValue(rec.getAcceptanceRate());
+                acceptanceCell.setCellStyle(percentStyle);
+                
+                Cell tuitionCell = row.createCell(3);
+                tuitionCell.setCellValue(rec.getAnnualTuition());
+                tuitionCell.setCellStyle(currencyStyle);
+                
+                row.createCell(4).setCellValue(String.join("\n", rec.getScholarships()));
+                
+                Cell probCell = row.createCell(5);
+                probCell.setCellValue(rec.getProbability());
+                probCell.setCellStyle(percentStyle);
+                
+                row.createCell(6).setCellValue(String.join("\n", rec.getPrograms()));
+                row.createCell(7).setCellValue(String.join("\n", rec.getDeadlines()));
             }
 
-            // Auto-size columns
-            for (int i = 0; i < headers.length; i++) {
-                sheet.autoSizeColumn(i);
-            }
+            // Enable auto-filter
+            sheet.setAutoFilter(new CellRangeAddress(0, 0, 0, headers.length - 1));
 
             ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
             workbook.write(outputStream);

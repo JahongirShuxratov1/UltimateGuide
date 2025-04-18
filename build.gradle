@@ -33,7 +33,11 @@ dependencies {
     implementation 'org.projectlombok:lombok-mapstruct-binding:0.2.0'
     
     // Google Cloud Vertex AI dependencies
+    implementation platform('com.google.cloud:libraries-bom:26.34.0')
     implementation 'com.google.cloud:google-cloud-vertexai:0.3.0'
+    implementation 'com.google.cloud:google-cloud-aiplatform:3.35.0'
+    implementation 'com.google.auth:google-auth-library-oauth2-http:1.23.0'
+    implementation 'com.google.auth:google-auth-library-credentials:1.23.0'
     
     // Apache POI for Excel
     implementation 'org.apache.poi:poi:5.2.5'
